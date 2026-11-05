@@ -67,3 +67,7 @@ Also fixed: the REST keyword no longer matches phrases like "the rest of the tea
 ## Validation
 
 The JavaScript syntax and the 100-profile loading flow were checked. The shortlist comparison layout and two-candidate selection were also exercised in a local browser. Rehearse on your laptop before presenting, especially if you plan to demonstrate browser speech recognition.
+
+## Recorded interviewer voice
+
+Four bundled recordings in `audio/` play for specific Data Engineer ETL and cloud warehouse questions. Other interview questions continue to use browser speech. Repeat question replays the matching recording; leaving or ending the interview stops playback. If the browser blocks autoplay, use the audio player's Play control. No live voice API or key is required.
