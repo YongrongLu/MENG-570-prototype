@@ -67,3 +67,9 @@ Also fixed: the REST keyword no longer matches phrases like "the rest of the tea
 ## Validation
 
 The JavaScript syntax and the 100-profile loading flow were checked. The shortlist comparison layout and two-candidate selection were also exercised in a local browser. Rehearse on your laptop before presenting, especially if you plan to demonstrate browser speech recognition.
+
+## Recorded interviewer voice
+
+Four user-supplied Jessica voice clips are bundled in audio/. They replace browser speech only when the full question matches the four entries in RECORDED_QUESTIONS in browser-interview.js. Repeat question replays the same clip. Other questions and follow-up branches continue to use browser speech. If autoplay is blocked, use the question audio player's Play control. Missing or unsupported clips fall back to browser speech. Leaving, skipping, ending, or resetting stops playback. No ElevenLabs API key or live requests are used.
+
+For the recorded ETL opening, ETL must be the first résumé gap in the Data Engineer application. The specific-example follow-up is selected for a short answer without other branching cues (for example, “Yes, I have”). Existing topic selection is unchanged.
