@@ -19,7 +19,7 @@ const JOBS = [
       { label: "Testing (Jest, Cypress, Playwright)", kws: ["jest", "cypress", "playwright", "vitest", "testing library", "unit test"],
         gapQ: "What testing tools and strategy do you use for frontend code?",
         verifyQ: "What is your approach to deciding what to unit test versus end-to-end test?" },
-      { label: "REST / GraphQL APIs", kws: ["rest", "graphql", "api"],
+      { label: "REST / GraphQL APIs", kws: ["rest api", "restful", "graphql", "api"],
         gapQ: "Have you integrated frontends with REST or GraphQL APIs? Describe a typical setup.",
         verifyQ: "How do you handle loading, error and caching states for API calls?" },
       { label: "CI/CD & Git workflows", kws: ["ci/cd", "github actions", "jenkins", "gitlab", "circleci", "git"],
