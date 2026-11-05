@@ -17,3 +17,17 @@
 .rw-compare-table .rw-name{font-size:.88rem}
 .rw-compare-table .r-rating{padding:8px 10px}
 @media(max-width:650px){.rw-phase2{padding:16px}.rw-compare-table tbody th{min-width:190px;max-width:190px}}
+/* Auto-suggested vs recruiter-confirmed ratings */
+.r-rating.r-suggested{border:1px dashed currentColor;background:transparent!important}
+.r-rating.r-confirmed{border:1px solid currentColor}
+.rw-flag{display:inline-block;margin:4px 4px 0 0;padding:2px 6px;border-radius:4px;font-size:.66rem;font-weight:600;white-space:nowrap}
+.rw-flag.warn{color:#a14f49;background:#f9e9e4}
+.rw-flag.gem{color:#5b4a8a;background:#efeaf8}
+.rw-flag.done{color:#286044;background:#ecf4ed}
+.rw-reasons{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;font-size:.72rem;color:#71605a}
+.rw-reasons span{background:#faf4ed;border-radius:4px;padding:2px 7px}
+.rw-reasons .rw-conf{font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.rw-reasons .rw-conf-high{color:#286044;background:#ecf4ed}
+.rw-reasons .rw-conf-low{color:#a14f49;background:#f9e9e4}
+.rw-accept{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 6px;font-size:.8rem;color:#71605a}
+.rw-evidence-head b{display:flex;align-items:center;gap:10px;flex-wrap:wrap}

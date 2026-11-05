@@ -1,4 +1,4 @@
-/* Head Hunters recruiter workspace — structured 1–5 human rubric, not an AI skills test.
+/* Head Hunters recruiter workspace — 1–5 rubric with rule-based suggestions (auto-score.js) that a recruiter confirms or overrides.
    Reads the current candidate portal's in-tab applications; no network/backend needed.
 */
 'use strict';
@@ -14,13 +14,21 @@ const safe=s=>esc(String(s??''));
 const getJob=()=>JOBS.find(j=>j.id===S.role);
 const reqs=()=>getJob().reqs;
 const forRole=()=>pool.filter(a=>a.jobId===S.role);
-const rating=(a,idx)=>{
- const own=S.ratings[a.id];
- if(own&&Object.prototype.hasOwnProperty.call(own,idx))return own[idx]===null?null:Number(own[idx]);
- const demo=a.demoRatings;
- if(Array.isArray(demo)&&Number.isInteger(demo[idx]))return demo[idx];
- return null;
+// Recruiter-confirmed rating wins; otherwise fall back to the rule-based suggestion (auto-score.js).
+// Cache is keyed to the exact résumé string and interview object, so a finished interview
+// (which assigns a new a.interview) or an edited résumé invalidates it immediately.
+const suggestCache=new WeakMap();
+const suggestion=(a,idx)=>{
+ let m=suggestCache.get(a);
+ if(!m||m.resume!==a.resume||m.interview!==a.interview){m={resume:a.resume,interview:a.interview,v:{}};suggestCache.set(a,m);}
+ const job=JOBS.find(j=>j.id===a.jobId),req=job?.reqs[idx];if(!req)return{score:null,confidence:'low',reasons:[],flag:null};
+ return m.v[idx]??=window.HHScore.suggest(a,req,{otherKws:job.reqs.filter((_,i)=>i!==idx).flatMap(r=>r.kws)});
 };
+const confirmed=(a,idx)=>{const own=S.ratings[a.id];return own&&Object.prototype.hasOwnProperty.call(own,idx)&&own[idx]!==null?Number(own[idx]):null;};
+const isConfirmed=(a,idx)=>confirmed(a,idx)!==null;
+const rating=(a,idx)=>{const c=confirmed(a,idx);return c!==null?c:suggestion(a,idx).score;};
+const fullyConfirmed=a=>reqs().every((_,i)=>isConfirmed(a,i));
+const flagsFor=a=>{const f={mismatch:0,beyond:0};reqs().forEach((_,i)=>{const s=suggestion(a,i);if(s.flag&&!isConfirmed(a,i))f[s.flag]++;});return f;};
 const getLabel=(value)=>value===null?'Not assessed':LEVELS[value]||'Not assessed';
 const persist=()=>{try{sessionStorage.setItem(KEY,JSON.stringify({role:S.role,rules:S.rules,ratings:S.ratings,advanced:S.advanced,notes:S.notes}));}catch{}};
 const defaultRules=()=>[{idx:1,min:4,required:true},{idx:0,min:3,required:true}];
@@ -48,47 +56,24 @@ const getVisible=()=>{
 };
 const mkOptions=(selected,items)=>items.map(([value,text])=>`<option value="${safe(value)}" ${String(value)===String(selected)?'selected':''}>${safe(text)}</option>`).join('');
 const ratingHtml=(a,idx)=>{
- const v=rating(a,idx);return `<span class="r-rating ${v===null?'r-unrated':tone[v]}" title="${safe(reqs()[idx].label)} — ${safe(getLabel(v))}">${v===null?'—':v} <small>${safe(getLabel(v))}</small></span>`;
+ const v=rating(a,idx),ok=isConfirmed(a,idx),s=suggestion(a,idx);
+ const how=ok?'Confirmed by recruiter':v===null?'Not enough evidence for a suggestion':`Auto-suggested (${s.confidence} confidence): ${s.reasons.join('; ')}`;
+ return `<span class="r-rating ${v===null?'r-unrated':tone[v]} ${ok?'r-confirmed':'r-suggested'}" title="${safe(reqs()[idx].label)} — ${safe(getLabel(v))}. ${safe(how)}">${ok?'✓ ':v===null?'':'≈'}${v===null?'—':v} <small>${safe(getLabel(v))}</small></span>`;
 };
-function sampleEvidence(job,idx,level){
- const req=job.reqs[idx].label;
- const skills={
-  fe:[['Migrated a customer dashboard from JavaScript to TypeScript','described type checking and testing changes'],['Built a React inventory table','described virtualization and measured rendering improvements'],['Improved keyboard navigation and WCAG issues','used screen reader testing and documented fixes'],['Added Playwright end-to-end tests to a checkout flow','investigated flaky test cases and release failures'],['Integrated REST services into a frontend','handled retries, caching, and loading states'],['Configured GitHub Actions to run CI checks','added preview deployments and tracked build time'],['Mentored junior engineers through code review','shared review examples and coaching outcomes']],
-  de:[['Built Python data pipelines for operational reporting','explained batch design and failure handling'],['Designed SQL data models for a sales reporting system','used CTEs, schema review, and indexing'],['Set up Airflow workflows and dbt transformations','documented retries and backfills'],['Worked on warehouse cost control in Snowflake','tested query changes and compute choices'],['Worked with streaming events and Spark batch jobs','described monitoring and partition trade-offs'],['Deployed a data workflow on AWS','covered access controls and environment setup'],['Added freshness checks to reporting pipelines','set alerts for missing source data']]
- };
- const item=skills[job.id][idx];
- if(level===1)return `I haven't worked directly with ${req} and cannot give a hands-on example.`;
- if(level===2)return `I have read about ${req} and tried a tutorial, but I haven't used it in production.`;
- if(level===3)return `I supported a team using ${req}. I helped with smaller tasks, but another teammate owned the end-to-end work.`;
- if(level===4)return `I personally contributed to a production project. ${item[0]}; I ${item[1]}. I can discuss my specific tasks.`;
- return `I personally owned this work end to end. ${item[0]}, ${item[1]}. I documented the approach, compared the results with the baseline, and coordinated the rollout with the team.`;
+// Fictional demo candidates come from demo-fixtures.js (archetype-based, seeded, 50 per role).
+let fixtures=null;
+const getFixtures=()=>fixtures??=window.HHDemo.build(JOBS);
+// Old demo profiles were different fictional people, so their ratings/shortlist/notes are discarded,
+// not remapped. Removal is written back to storage immediately.
+function dropStaleDemo(){
+ let removed=0;for(let i=pool.length-1;i>=0;i--)if(pool[i].demo&&pool[i].demoVersion!==window.HHDemo.VERSION){pool.splice(i,1);removed++;}
+ const live=new Set(pool.map(a=>a.id));let orphans=0;
+ for(const bag of [S.ratings,S.advanced,S.notes])for(const id of Object.keys(bag))if(id.startsWith('demo')&&!live.has(id)){delete bag[id];orphans++;}
+ if(removed)savePool();if(orphans)persist();
 }
-const originalFixtures=[
- {id:'demo-fe-avery',name:'Avery Chen',role:'fe',ratings:[5,5,4,4,5,3,4]},
- {id:'demo-fe-morgan',name:'Morgan Patel',role:'fe',ratings:[5,3,3,5,4,4,3]},
- {id:'demo-fe-jamie',name:'Jamie Reed',role:'fe',ratings:[3,4,5,3,4,5,5]},
- {id:'demo-fe-taylor',name:'Taylor Kim',role:'fe',ratings:[4,2,3,3,5,4,4]},
- {id:'demo-fe-casey',name:'Casey Rivera',role:'fe',ratings:[4,4,2,4,3,4,3]},
- {id:'demo-de-priya',name:'Priya Shah',role:'de',ratings:[5,5,4,4,4,3,5]},
- {id:'demo-de-jordan',name:'Jordan Lee',role:'de',ratings:[3,4,4,5,4,5,3]},
- {id:'demo-de-sofia',name:'Sofia Brooks',role:'de',ratings:[4,3,5,3,2,4,4]}
-];
-const firstNames=['Alex','Bailey','Cameron','Dakota','Elliot','Finley','Harper','Indigo','Jules','Kai','Logan','Maya','Noah','Parker','Quinn','Riley','Sage','Tessa','Uma','Zoe'];
-const lastNames=['Adams','Bennett','Cruz','Diaz','Evans'];
-const generatedFixtures=(role,count,offset)=>Array.from({length:count},(_,i)=>({
- id:`demo-${role}-generated-${String(i+1).padStart(2,'0')}`,
- name:`${firstNames[(offset+i)%firstNames.length]} ${lastNames[Math.floor((offset+i)/firstNames.length)]}`,
- role,
- ratings:Array.from({length:7},(_,j)=>1+((i*7+j*11+Math.floor(i/7)+(role==='de'?2:0))%5))
-}));
-const fixtures=[...originalFixtures,...generatedFixtures('fe',45,0),...generatedFixtures('de',47,45)];
 function loadSamples(){
- for(const f of fixtures){
-  if(pool.some(a=>a.id===f.id))continue;
-  const job=JOBS.find(j=>j.id===f.role);
-  const topics=job.reqs.map((r,i)=>({label:r.label,status:'Answer recorded',answers:[sampleEvidence(job,i,f.ratings[i])]}));
-  pool.push({id:f.id,name:f.name,jobId:f.role,submitted:new Date().toISOString(),finished:new Date().toISOString(),state:'review',resume:`Fictional demonstration résumé for ${f.name}. This example candidate is used only to illustrate the screening interface for ${job.title}; the listed experience statements below are synthetic.\n\n${topics.map(t=>t.answers[0]).join('\n')}`,interview:{completed:true,topics,transcript:topics.flatMap(t=>[`Interviewer: ${job.reqs.find(r=>r.label===t.label)?.verifyQ||t.label}`,`Candidate: ${t.answers[0]}`])},demoRatings:[...f.ratings],demo:true});
- }
+ dropStaleDemo();
+ for(const f of getFixtures())if(!pool.some(a=>a.id===f.id))pool.push(structuredClone(f));
  savePool();render();
 }
 function renderRules(){
@@ -105,16 +90,16 @@ function renderRules(){
 }
 function renderPhase1(){
  const visible=getVisible(), all=forRole();
- return `<div class="rw-results panel"><div class="rw-section-top rw-result-heading"><div><p class="eyebrow">PHASE 1 · INITIAL SCREENING</p><h2>Screen at scale.</h2><p class="rw-muted">Coarse 1–5 requirement ratings. Adjust the rules and decide who to compare in Phase 2.</p></div><button type="button" data-act="load-demo" class="ghost">${fixtures.some(f=>!pool.some(a=>a.id===f.id))?'Load 100 fictional profiles':'Demo profiles loaded'}</button></div>
+ return `<div class="rw-results panel"><div class="rw-section-top rw-result-heading"><div><p class="eyebrow">PHASE 1 · INITIAL SCREENING</p><h2>Screen at scale.</h2><p class="rw-muted">Every requirement gets an auto-suggested 1–5 rating (≈) from résumé and interview evidence. Filter on it, then confirm (✓) or override before deciding.</p></div><button type="button" data-act="load-demo" class="ghost">${getFixtures().some(f=>!pool.some(a=>a.id===f.id))?'Load 100 fictional profiles':'Demo profiles loaded'}</button></div>
  ${toolbar(visible,all)}
  <div class="rw-scroll"><table class="rw-table"><thead><tr><th>Candidate</th><th>Interview</th>${S.rules.map(r=>`<th>${safe(reqs()[r.idx].label)}</th>`).join('')}<th>Required fit</th><th>Next step</th></tr></thead><tbody>
- ${visible.map(a=>`<tr><td><button class="rw-name" data-act="detail" data-id="${safe(a.id)}">${safe(a.name)}</button><small>${a.demo?'Fictional sample':'Portal application'}</small></td><td>${a.interview?'<span class="rw-status ready">Recorded</span>':'<span class="rw-status waiting">Pending</span>'}</td>${S.rules.map(r=>`<td>${ratingHtml(a,r.idx)}</td>`).join('')}
+ ${visible.map(a=>`<tr><td><button class="rw-name" data-act="detail" data-id="${safe(a.id)}">${safe(a.name)}</button><small>${a.demo?safe(a.headline||'Fictional sample'):'Portal application'}</small>${(f=>`${f.mismatch?`<span class="rw-flag warn" title="Résumé claims a skill the interview did not back up">⚠ ${f.mismatch} résumé gap${f.mismatch>1?'s':''}</span>`:''}${f.beyond?`<span class="rw-flag gem" title="Strong interview evidence that is not on the résumé">★ ${f.beyond} beyond résumé</span>`:''}`)(flagsFor(a))}${fullyConfirmed(a)?'<span class="rw-flag done">✓ Confirmed</span>':''}</td><td>${a.interview?'<span class="rw-status ready">Recorded</span>':'<span class="rw-status waiting">Pending</span>'}</td>${S.rules.map(r=>`<td>${ratingHtml(a,r.idx)}</td>`).join('')}
  <td>${matches(a)?'<span class="rw-status ready">Meets selected rules</span>':'<span class="rw-status waiting">Requires review</span>'}${S.rules.some(r=>!r.required)?`<small>${criteriaCount(a)} preferred criteria met</small>`:''}</td><td><div class="rw-actions"><button data-act="detail" data-id="${safe(a.id)}" class="ghost">Evidence ↗</button><button data-act="advance" data-id="${safe(a.id)}" class="rw-small-primary" aria-pressed="${isAdvance(a)}">${isAdvance(a)?'✓ Shortlisted':'+ Shortlist'}</button></div></td></tr>`).join('')||`<tr><td colspan="${S.rules.length+4}" class="rw-empty">No candidates found. Load the fictional examples, change filters, or submit an application in the candidate portal.</td></tr>`}
- </tbody></table></div><p class="rw-caption">These grades are illustrative demo rubric decisions or recruiter-entered assessments—not AI-verified skill scores.</p></div>`;
+ </tbody></table></div><p class="rw-caption"><b>≈</b> auto-suggested by transparent rules (keywords, ownership language, quantified outcomes) · <b>✓</b> confirmed by a recruiter · ⚠ résumé claim not backed in interview · ★ strong evidence missing from résumé. Suggestions are not validated predictors of job performance.</p></div>`;
 }
 function toolbar(visible,all){
  const matching=all.filter(matches).length;
- return `<div class="rw-stats"><div><small>For this role</small><b>${all.length}</b></div><div><small>Meet required rules</small><b>${matching}</b></div><div><small>Interviews recorded</small><b>${all.filter(a=>!!a.interview).length}</b></div><div><small>Shortlisted</small><b>${all.filter(isAdvance).length}</b></div></div>
+ return `<div class="rw-stats"><div><small>For this role</small><b>${all.length}</b></div><div><small>Meet required rules</small><b>${matching}</b></div><div><small>Recruiter-confirmed</small><b>${all.filter(fullyConfirmed).length}</b></div><div><small>Shortlisted</small><b>${all.filter(isAdvance).length}</b></div></div>
  <div class="rw-toolbar"><label>Search <input type="search" data-search placeholder="Candidate name" value="${safe(S.query)}"></label><label>Sort by<select data-sort>${mkOptions(S.sort,[['name','Name'],['status','Interview status'],...reqs().map((r,i)=>[`r${i}`,r.label])])}</select></label><button type="button" data-act="direction" class="ghost">${S.desc?'↓ Desc':'↑ Asc'}</button></div>
  <div class="rw-subtabs">${[['all','All candidates'],['matched','Matching rules'],['shortlist','My shortlist']].map(([val,label])=>`<button data-act="view" data-val="${val}" aria-pressed="${S.view===val}">${label}</button>`).join('')}<span>${visible.length} visible</span></div>`;
 }
@@ -130,10 +115,10 @@ function renderDetail(){
  const a=pool.find(v=>v.id===S.focus);if(!a)return '';
  const notes=a.interview?.topics||[];
  return `<div class="rw-overlay" role="presentation" data-act="close"><section class="rw-modal" role="dialog" aria-modal="true" aria-labelledby="rw-detail-title"><div class="rw-section-top rw-modal-header"><div><p class="eyebrow">INTERVIEW EVIDENCE · RECRUITER REVIEW</p><h2 id="rw-detail-title">${safe(a.name)}</h2><p class="rw-muted">${safe(jobFor(a)?.title)} · ${a.demo?'Entirely fictional demonstration':'Current portal application'}</p></div><button type="button" class="rw-close" data-act="close" aria-label="Close details">×</button></div>
- <p class="rw-callout">Ratings below use a human-editable, coarse rubric. Interview excerpts are candidate-reported, may contain transcription errors, and have not been independently verified. No automatic hiring recommendation.</p>
+ <p class="rw-callout">Each rating starts as a rule-based suggestion (≈) built from résumé keywords and the linked interview answer. Read the evidence, then accept or override it — confirmed ratings (✓) always take priority. Interview excerpts are candidate-reported and unverified. No automatic hiring decision.</p><div class="rw-accept"><span>${reqs().filter((_,i)=>isConfirmed(a,i)).length} / ${reqs().length} confirmed</span><button type="button" class="ghost" data-act="accept-all" data-id="${safe(a.id)}">Accept all suggestions</button></div>
  ${reqs().map((r,i)=>{
-  const topic=notes.find(t=>t.label===r.label),ans=topic?.answers?.join(' / ')||'No interview response recorded for this criterion.';
-  return `<div class="rw-evidence"><div class="rw-evidence-head"><b>${safe(r.label)}</b><label>Rubric rating<select data-rate="${i}" data-id="${safe(a.id)}">${mkOptions(rating(a,i)??'',[['','Not assessed'],...Object.entries(LEVELS).map(([v,n])=>[v,`${v} · ${n}`])])}</select></label></div><details><summary>View linked interview answer</summary><p class="rw-answer">${safe(ans)}</p><p class="rw-muted">Question: ${safe(getJob().reqs[i]?.verifyQ||r.label)}</p></details></div>`;
+  const sg=suggestion(a,i),topic=notes.find(t=>t.label===r.label),ans=topic?.answers?.join(' / ')||'No interview response recorded for this criterion.';
+  return `<div class="rw-evidence"><div class="rw-evidence-head"><b>${safe(r.label)} ${ratingHtml(a,i)}</b><label>Recruiter rating<select data-rate="${i}" data-id="${safe(a.id)}">${mkOptions(confirmed(a,i)??'',[['',sg.score===null?'Not assessed — no suggestion':`Unconfirmed — using suggestion ≈${sg.score}`],...Object.entries(LEVELS).map(([v,n])=>[v,`✓ ${v} · ${n}`])])}</select></label></div><p class="rw-reasons"><span class="rw-conf rw-conf-${sg.confidence}">${sg.confidence} confidence</span>${sg.reasons.map(x=>`<span>${safe(x)}</span>`).join('')}</p><details><summary>View linked interview answer</summary><p class="rw-answer">${safe(ans)}</p><p class="rw-muted">Question: ${safe(getJob().reqs[i]?.verifyQ||r.label)}</p></details></div>`;
  }).join('')}
  <label class="rw-note-label">Recruiter notes<textarea data-note="${safe(a.id)}" rows="3" placeholder="Questions to verify, role-specific concerns, next steps…">${safe(S.notes[a.id]||'')}</textarea></label>
  <div class="rw-modal-actions"><a href="#review/${safe(a.id)}" class="ghost button">Original transcript view</a><button class="ghost" data-act="close">Close</button><button class="rw-small-primary" data-act="advance" data-id="${safe(a.id)}">${isAdvance(a)?'Remove from shortlist':'+ Shortlist'}</button></div></section></div>`;
@@ -159,6 +144,7 @@ function act(node){const action=node.dataset.act,id=node.dataset.id;
  else if(action==='detail'){S.focus=id;render();}
  else if(action==='close'){S.focus=null;render();}
  else if(action==='back-phase1'){S.phase=1;S.view='all';render();}
+ else if(action==='accept-all'){const a=pool.find(v=>v.id===id);if(a){S.ratings[id]=S.ratings[id]||{};reqs().forEach((_,i)=>{if(!isConfirmed(a,i)){const v=suggestion(a,i).score;if(v!==null)S.ratings[id][i]=v;}});persist();render();}}
  else if(action==='advance'){
   S.advanced[id]=!S.advanced[id];
   persist();render();
@@ -167,6 +153,7 @@ function act(node){const action=node.dataset.act,id=node.dataset.id;
 window.resetRecruiterWorkspace=function(){S.phase=1;S.view='all';S.query='';S.ratings={};S.advanced={};S.notes={};S.focus=null;S.role='fe';resetRules();};
 window.renderRecruiterWorkspace=function(element,apps,persistApps,jobLookup,analyzeFn,escapeFn){
  root=element;pool=apps;savePool=persistApps;jobFor=jobLookup;analyze=analyzeFn;esc=escapeFn;
+ dropStaleDemo();
  if(!Array.isArray(saved.rules))resetRules();
  render();
  root.onclick=e=>{
@@ -179,7 +166,7 @@ window.renderRecruiterWorkspace=function(element,apps,persistApps,jobLookup,anal
   if(n.matches('[data-role]')){S.role=n.value;S.rules=defaultRules().filter(r=>r.idx<reqs().length);S.view='all';S.phase=1;S.query='';persist();render();}
   if(n.matches('[data-rule]')){const rule=S.rules[Number(n.dataset.index)];if(!rule)return;if(n.dataset.rule==='metric')rule.idx=Number(n.value);if(n.dataset.rule==='min')rule.min=Number(n.value);if(n.dataset.rule==='required')rule.required=n.value==='true';persist();render();}
   if(n.matches('[data-sort]')){S.sort=n.value;render();}
-  if(n.matches('[data-rate]')){if(!S.ratings[n.dataset.id])S.ratings[n.dataset.id]={};if(n.value==='')S.ratings[n.dataset.id][n.dataset.rate]=null;else S.ratings[n.dataset.id][n.dataset.rate]=Number(n.value);persist();render();}
+  if(n.matches('[data-rate]')){if(!S.ratings[n.dataset.id])S.ratings[n.dataset.id]={};if(n.value==='')delete S.ratings[n.dataset.id][n.dataset.rate];else S.ratings[n.dataset.id][n.dataset.rate]=Number(n.value);persist();render();}
  };
  root.oninput=e=>{
   const n=e.target;if(n.matches('[data-search]')){S.query=n.value;const cursor=n.selectionStart;render();const q=root.querySelector('[data-search]');q?.focus();try{q.setSelectionRange(cursor,cursor);}catch{}}
