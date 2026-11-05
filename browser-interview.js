@@ -19,6 +19,15 @@ function demoFollowUp(answer, topic, stage) {
   return 'Walk me through one decision you made in that example. What alternatives did you consider, and what was the outcome?';
 }
 
+// Exact question text maps to bundled recordings; all other questions use browser speech.
+const RECORDED_QUESTIONS = new Map([
+  ["Welcome to your mock interview for Data Engineer. Let's start. Have you built and scheduled ETL/ELT pipelines? With which tools?", 'audio/etl-intro.mp3'],
+  ['Could you give me one specific example involving ETL / orchestration (Airflow, dbt), including what you did and what happened?', 'audio/etl-example.mp3'],
+  ['Moving to the next topic. Which cloud data warehouses have you used, and for what workloads?', 'audio/warehouse-question.mp3'],
+  ['Could you give me one specific example involving Cloud data warehouse (Snowflake, BigQuery, Redshift), including what you did and what happened?', 'audio/warehouse-example.mp3']
+]);
+function recordedQuestion(question) { return RECORDED_QUESTIONS.get(question.trim().replace(/\s+/g, ' ')); }
+
 function runInterview(job, res, matchPct, onComplete) {
   stopInterview();
   const topics = [...res.gaps.map(t=>({...t,gap:true})),
@@ -32,6 +41,7 @@ function runInterview(job, res, matchPct, onComplete) {
     <button class="ghost" id="browser-camera-toggle">Enable camera</button><p class="note" id="browser-camera-status">Camera is off. Video is never recorded.</p>
     <div class="voice-orb" id="browser-orb" aria-hidden="true">◉</div>
     <p id="browser-status" role="status">Ready when you are</p>
+    <audio id="browser-recording" controls hidden preload="auto" aria-label="Interviewer question recording"></audio>
     <p id="browser-question" class="spoken-question" aria-live="polite">Questions will appear here and be read aloud.</p>
     <div class="voice-controls"><button class="primary" id="browser-start">Begin interview</button><button class="ghost" id="browser-listen" disabled>Speak answer</button><button class="ghost" id="browser-repeat" disabled>Repeat question</button><button class="ghost" id="browser-end" disabled>End interview</button></div>
     <label for="browser-answer">Your answer (speech appears here; you can also type or edit it)</label>
@@ -69,15 +79,36 @@ function runInterview(job, res, matchPct, onComplete) {
     if(current){current.onresult=null;current.onend=null;current.onerror=null;current.abort();}
     el('listen').textContent='Speak answer';
   }
-  function cancelSpeech(){speechGeneration++;window.speechSynthesis?.cancel();speaking=false;}
+  function cancelSpeech(){
+    speechGeneration++;window.speechSynthesis?.cancel();speaking=false;
+    const audio=el('recording');audio.onended=null;audio.onerror=null;audio.onplay=null;
+    audio.pause();audio.removeAttribute('src');audio.load();audio.hidden=true;
+  }
   function speak(question){
     stopListening();cancelSpeech();el('question').textContent=question;
-    if(!window.speechSynthesis){status('Read the question, then speak or type your answer.');return;}
     const generation=speechGeneration;
-    const utterance=new SpeechSynthesisUtterance(question);utterance.lang='en-US';utterance.rate=0.96;
-    speaking=true;el('listen').disabled=true;status('Interviewer speaking…');
-    const done=()=>{if(disposed||!running||generation!==speechGeneration)return;speaking=false;el('listen').disabled=!Recognition;status('Your turn — click Speak answer or type.');};
-    utterance.onend=done;utterance.onerror=done;window.speechSynthesis.speak(utterance);
+    const current=()=>!disposed&&running&&generation===speechGeneration;
+    const done=()=>{if(!current())return;speaking=false;el('listen').disabled=!Recognition;status('Your turn — click Speak answer or type.');};
+    const browserSpeech=()=>{
+      if(!current())return;
+      if(!window.speechSynthesis){done();return;}
+      const utterance=new SpeechSynthesisUtterance(question);utterance.lang='en-US';utterance.rate=0.96;
+      speaking=true;el('listen').disabled=true;status('Interviewer speaking…');
+      utterance.onend=done;utterance.onerror=done;window.speechSynthesis.speak(utterance);
+    };
+    const clip=recordedQuestion(question);
+    if(!clip){browserSpeech();return;}
+    const audio=el('recording');speaking=true;el('listen').disabled=true;
+    audio.src=clip;audio.hidden=false;
+    const fallback=()=>{if(!current())return;audio.onerror=null;audio.onended=null;audio.pause();audio.hidden=true;browserSpeech();};
+    audio.onended=done;audio.onerror=fallback;
+    audio.onplay=()=>{if(current()){stopListening();speaking=true;el('listen').disabled=true;status('Interviewer speaking…');}};
+    status('Interviewer speaking…');
+    audio.play().catch(error=>{
+      if(!current())return;
+      if(error.name==='NotAllowedError'){status('Press play in the audio player to hear the question.');}
+      else fallback();
+    });
   }
   function ask(){
     el('answer').value='';stage=0;renderTopics();
